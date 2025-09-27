@@ -1,12 +1,14 @@
 use std::sync::{Arc, Mutex};
 
 use aio_translator_interface::{
-    BlockingTranslator, Language, Model, Translator, TranslatorMutTrait, TranslatorTrait,
-    error::Error, prompt::PromptBuilder, tokenizer::SentenceTokenizer,
+    AsyncTranslator, Language, Model, TranslationListOutput, TranslationOutput, error::Error,
+    prompt::PromptBuilder, tokenizer::SentenceTokenizer,
 };
 use ct2rs::{BatchType, ComputeType, Config, Device, Tokenizer, TranslationOptions};
 
-use interface_model::{ModelLoad, ModelSource, impl_model_load_helpers};
+use interface_model::{
+    ModelLoad, ModelRead, ModelSource, ModelWrap, impl_model_helpers, impl_model_load_helpers,
+};
 use maplit::hashmap;
 
 pub struct MyTokenizer {
@@ -33,7 +35,7 @@ impl Tokenizer for MyTokenizer {
 }
 
 pub struct M2M100Translator {
-    loaded_models: Option<ct2rs::Translator<MyTokenizer>>,
+    loaded_models: ModelWrap<ct2rs::Translator<MyTokenizer>>,
     cuda: bool,
     compute_type: ComputeType,
     from: Arc<Mutex<String>>,
@@ -52,49 +54,45 @@ impl M2M100Translator {
             compute_type,
             cuda,
             size,
-            loaded_models: None,
+            loaded_models: Default::default(),
             from: Arc::default(),
         }
     }
 }
 
-impl Translator for M2M100Translator {
+#[async_trait::async_trait]
+impl AsyncTranslator for M2M100Translator {
     fn local(&self) -> bool {
         true
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Blocking(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Blocking(self)
-    }
-}
-
-impl BlockingTranslator for M2M100Translator {
-    fn translate(
-        &mut self,
+    async fn translate(
+        &self,
         query: &str,
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<String> {
-        let mut arr = self.translate_vec(&vec![query.to_owned()], None, from, to)?;
-        Ok(arr.remove(0))
+    ) -> anyhow::Result<TranslationOutput> {
+        let mut arr = self
+            .translate_vec(&vec![query.to_owned()], None, from, to)
+            .await?;
+        Ok(TranslationOutput {
+            text: arr.text.remove(0),
+            lang: None,
+        })
     }
 
-    fn translate_vec(
-        &mut self,
+    async fn translate_vec(
+        &self,
         query: &[String],
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<TranslationListOutput> {
+        let from = from.ok_or(Error::NoLanguage)?;
         let from = from.to_m2m100().ok_or(Error::UnknownLanguage(from))?;
         let to = to.to_m2m100().ok_or(Error::UnknownLanguage(to.clone()))?;
         *self.from.lock().unwrap() = from.to_owned();
-        let model = self.load()?;
+        let model = self.load().await?;
         let trans = model.translate_batch_with_target_prefix(
             query,
             &vec![vec![to.to_string()]; query.len()],
@@ -109,28 +107,27 @@ impl BlockingTranslator for M2M100Translator {
             },
             None,
         )?;
-        Ok(trans.into_iter().map(|v| v.0).collect())
+        Ok(TranslationListOutput {
+            text: trans.into_iter().map(|v| v.0).collect(),
+            lang: None,
+        })
     }
 }
 
+#[async_trait::async_trait]
 impl ModelLoad for M2M100Translator {
-    type T = ct2rs::Translator<MyTokenizer>;
-
-    fn loaded(&self) -> bool {
-        self.loaded_models.is_some()
-    }
-
-    fn get_model(&mut self) -> Option<&mut Self::T> {
-        self.loaded_models.as_mut()
-    }
-
-    fn reload(&mut self) -> anyhow::Result<&mut Self::T> {
+    impl_model_load_helpers!(loaded_models, ct2rs::Translator<MyTokenizer>);
+    async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let model_name = match self.size {
             Size::Small => "418M",
             Size::Large => "1.2B",
         };
-        let model = self.download_model(model_name, &format!("{}/model.bin", model_name))?;
-        let path = self.download_model("spm", "sentencepiece.bpe.model")?;
+        let model = self
+            .download_model(model_name, &format!("{}/model.bin", model_name))
+            .await?;
+        let path = self
+            .download_model("spm", "sentencepiece.bpe.model")
+            .await?;
         let from = Arc::new(Mutex::new("".to_string()));
         let tokenizer = MyTokenizer::new(SentenceTokenizer::new(path), from);
         let model = model.parent().map(|v| v.to_path_buf()).unwrap_or(model);
@@ -147,13 +144,13 @@ impl ModelLoad for M2M100Translator {
             },
         )?;
 
-        self.loaded_models = Some(v);
-        Ok(self.loaded_models.as_mut().unwrap())
+        *self.loaded_models.write().await = Some(v);
+        Ok(self.get_model().await.expect("set model"))
     }
 }
 
 impl Model for M2M100Translator {
-    impl_model_load_helpers!("translator", "M2M100");
+    impl_model_helpers!("translator", "M2M100", loaded_models);
 
     fn models(&self) -> std::collections::HashMap<&'static str, interface_model::ModelSource> {
         hashmap! {
@@ -170,10 +167,6 @@ impl Model for M2M100Translator {
                 hash: "d8f7c76ed2a5e0822be39f0a4f95a55eb19c78f4593ce609e2edbc2aea4d380a"
             }
         }
-    }
-
-    fn unload(&mut self) {
-        self.loaded_models = None;
     }
 }
 
@@ -205,17 +198,17 @@ mod tests {
             Language::from_m2m100(lang).expect(lang);
         }
     }
-    #[test]
-    fn test_load() {
-        let mut m2m100 = M2M100Translator::new(false, ComputeType::DEFAULT, Size::Small);
-        assert!(m2m100.load().is_ok());
-        assert!(m2m100.loaded());
+    #[tokio::test]
+    async fn test_load() {
+        let m2m100 = M2M100Translator::new(false, ComputeType::DEFAULT, Size::Small);
+        assert!(m2m100.load().await.is_ok());
+        assert!(m2m100.loaded().await);
     }
 
-    #[test]
-    fn test_translate() {
+    #[tokio::test]
+    async fn test_translate() {
         env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
-        let mut m2m100 = M2M100Translator::new(false, ComputeType::INT8, Size::Large);
+        let m2m100 = M2M100Translator::new(false, ComputeType::INT8, Size::Large);
         let input_ja = vec![
             "明日は雨が降るかもしれません。".to_string(),
             "彼はその問題について深く考えている。".to_string(),
@@ -223,10 +216,16 @@ mod tests {
         ];
 
         let out = m2m100
-            .translate_vec(&input_ja, None, Language::Japanese, &Language::English)
+            .translate_vec(
+                &input_ja,
+                None,
+                Some(Language::Japanese),
+                &Language::English,
+            )
+            .await
             .expect("Translation failed");
         assert_eq!(
-            out,
+            out.text,
             vec![
                 "It may rain tomorrow.".to_owned(),
                 "He is thinking deeply about the problem.".to_owned(),
@@ -240,10 +239,16 @@ mod tests {
             "Artificial intelligence is changing the world rapidly.".to_string(),
         ];
         let out = m2m100
-            .translate_vec(&input_en, None, Language::English, &Language::Japanese)
+            .translate_vec(
+                &input_en,
+                None,
+                Some(Language::English),
+                &Language::Japanese,
+            )
+            .await
             .expect("Translation failed");
         assert_eq!(
-            out,
+            out.text,
             vec![
                 "会議は次の週まで延期された。".to_owned(),
                 "彼は素早く、それが何らかの悪意であることを悟った。".to_owned(),

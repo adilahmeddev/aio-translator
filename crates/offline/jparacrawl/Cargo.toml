@@ -14,3 +14,7 @@ maplit.workspace = true
 env_logger.workspace = true
 log = "0.4.27"
 anyhow.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

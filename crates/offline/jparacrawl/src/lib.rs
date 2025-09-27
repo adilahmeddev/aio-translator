@@ -1,19 +1,21 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use aio_translator_interface::{
-    BlockingTranslator, Language, Model, Translator, TranslatorMutTrait, TranslatorTrait,
+    AsyncTranslator, Language, Model, TranslationListOutput, TranslationOutput,
     error::{self},
     prompt::PromptBuilder,
     tokenizer::SentenceTokenizer,
 };
+use anyhow::bail;
 use ct2rs::{BatchType, ComputeType, Config, Device, Tokenizer, TranslationOptions};
 
-use interface_model::{ModelLoad, ModelSource, impl_model_load_helpers};
+use interface_model::{ModelLoad, ModelRead, ModelSource};
 use maplit::hashmap;
+use tokio::sync::RwLock;
 
 pub struct JParaCrawlTranslator {
     single_loaded: bool,
-    loaded_models: HashMap<String, ct2rs::Translator<MyTokenizer>>,
+    loaded_models: Arc<RwLock<HashMap<String, ct2rs::Translator<MyTokenizer>>>>,
     cuda: bool,
     compute_type: ComputeType,
     size: Size,
@@ -73,49 +75,42 @@ impl JParaCrawlTranslator {
     }
 }
 
-impl Translator for JParaCrawlTranslator {
+#[async_trait::async_trait]
+impl AsyncTranslator for JParaCrawlTranslator {
     fn local(&self) -> bool {
         true
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Blocking(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Blocking(self)
-    }
-}
-
-impl BlockingTranslator for JParaCrawlTranslator {
-    fn translate(
-        &mut self,
+    async fn translate(
+        &self,
         query: &str,
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<String> {
-        let mut arr = self.translate_vec(&vec![query.to_owned()], None, from, to)?;
-        Ok(arr.remove(0))
+    ) -> anyhow::Result<TranslationOutput> {
+        let mut arr = self
+            .translate_vec(&vec![query.to_owned()], None, from, to)
+            .await?;
+        Ok(TranslationOutput {
+            text: arr.text.remove(0),
+            lang: None,
+        })
     }
 
-    fn translate_vec(
-        &mut self,
+    async fn translate_vec(
+        &self,
         query: &[String],
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<TranslationListOutput> {
         let eng_src = match (from, to) {
-            (Language::English, Language::Japanese) => true,
-            (Language::Japanese, Language::English) => false,
+            (Some(Language::English), Language::Japanese) => true,
+            (Some(Language::Japanese), Language::English) => false,
             _ => {
                 Err(error::Error::UnknownLanguageGroup(from, to.clone()))?;
                 false
             }
         };
-        self.load()?;
-
         let (from, to) = match eng_src {
             true => ("en", "ja"),
             false => ("ja", "en"),
@@ -130,10 +125,12 @@ impl BlockingTranslator for JParaCrawlTranslator {
                 Size::Large => "big",
             }
         );
-        self.custom_load(&model_name, eng_src)?;
+        self.custom_load(&model_name, eng_src).await?;
         let trans = self
             .loaded_models
-            .get_mut(&model_name)
+            .read()
+            .await
+            .get(&model_name)
             .expect("loaded in function")
             .translate_batch(
                 query,
@@ -150,18 +147,27 @@ impl BlockingTranslator for JParaCrawlTranslator {
                 None,
             )?;
 
-        Ok(trans.into_iter().map(|v| v.0).collect())
+        Ok(TranslationListOutput {
+            text: trans.into_iter().map(|v| v.0).collect(),
+            lang: None,
+        })
     }
 }
 
 impl JParaCrawlTranslator {
-    fn custom_load(&mut self, name: &str, en_ja: bool) -> anyhow::Result<()> {
-        if self.loaded_models.contains_key(name) {
+    async fn custom_load(&self, name: &str, en_ja: bool) -> anyhow::Result<()> {
+        if self.loaded_models.read().await.contains_key(name) {
             return Ok(());
         }
-        let model = self.download_model(name, &format!("{}/model.bin", name))?;
-        let ja_path = self.download_model("spm.nopretok", "spm.nopretok/spm.ja.nopretok.model")?;
-        let en_path = self.download_model("spm.nopretok", "spm.nopretok/spm.en.nopretok.model")?;
+        let model = self
+            .download_model(name, &format!("{}/model.bin", name))
+            .await?;
+        let ja_path = self
+            .download_model("spm.nopretok", "spm.nopretok/spm.ja.nopretok.model")
+            .await?;
+        let en_path = self
+            .download_model("spm.nopretok", "spm.nopretok/spm.en.nopretok.model")
+            .await?;
 
         let model = model.parent().map(|v| v.to_path_buf()).unwrap_or(model);
         let my = MyTokenizer::new(en_ja, ja_path, en_path)?;
@@ -179,15 +185,30 @@ impl JParaCrawlTranslator {
             },
         )?;
         if self.single_loaded {
-            self.loaded_models.drain();
+            self.loaded_models.write().await.drain();
         }
-        self.loaded_models.insert(name.to_owned(), v);
+        self.loaded_models.write().await.insert(name.to_owned(), v);
         Ok(())
     }
 }
 
+#[async_trait::async_trait]
 impl Model for JParaCrawlTranslator {
-    impl_model_load_helpers!("translator", "JParaCrawl");
+    async fn loaded_(&self) -> bool {
+        self.loaded().await
+    }
+
+    async fn reload_(&self) -> anyhow::Result<()> {
+        self.reload().await?;
+        Ok(())
+    }
+    fn name(&self) -> &'static str {
+        "JParaCrawl"
+    }
+
+    fn kind(&self) -> &'static str {
+        "translator"
+    }
 
     fn models(&self) -> std::collections::HashMap<&'static str, interface_model::ModelSource> {
         hashmap! {
@@ -222,24 +243,25 @@ impl Model for JParaCrawlTranslator {
         }
     }
 
-    fn unload(&mut self) {
-        self.loaded_models = HashMap::new();
+    async fn unload(&self) {
+        *self.loaded_models.write().await = HashMap::new();
     }
 }
 
+#[async_trait::async_trait]
 impl ModelLoad for JParaCrawlTranslator {
-    type T = HashMap<String, ct2rs::Translator<MyTokenizer>>;
+    type T = ();
 
-    fn loaded(&self) -> bool {
-        self.loaded_models.len() > 0
+    async fn loaded(&self) -> bool {
+        self.loaded_models.read().await.len() > 0
     }
 
-    fn get_model(&mut self) -> Option<&mut Self::T> {
-        Some(&mut self.loaded_models)
+    async fn get_model(&self) -> Option<ModelRead<'_, Self::T>> {
+        None
     }
 
-    fn reload(&mut self) -> anyhow::Result<&mut Self::T> {
-        Ok(&mut self.loaded_models)
+    async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
+        bail!("Not implemented")
     }
 }
 
@@ -249,17 +271,16 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_load() {
-        let mut jparacrawl = JParaCrawlTranslator::new(false, false, ComputeType::INT8, Size::Base);
-        assert!(jparacrawl.load().is_ok());
+    #[tokio::test]
+    async fn test_load() {
+        let jparacrawl = JParaCrawlTranslator::new(false, false, ComputeType::INT8, Size::Base);
+        assert!(jparacrawl.load().await.is_ok());
     }
 
-    #[test]
-    fn test_translate() {
+    #[tokio::test]
+    async fn test_translate() {
         env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
-        let mut jparacrawl =
-            JParaCrawlTranslator::new(false, false, ComputeType::DEFAULT, Size::Base);
+        let jparacrawl = JParaCrawlTranslator::new(false, false, ComputeType::DEFAULT, Size::Base);
         let input_ja = vec![
             "明日は雨が降るかもしれません。".to_string(),
             "彼はその問題について深く考えている。".to_string(),
@@ -267,10 +288,16 @@ mod tests {
         ];
 
         let out = jparacrawl
-            .translate_vec(&input_ja, None, Language::Japanese, &Language::English)
+            .translate_vec(
+                &input_ja,
+                None,
+                Some(Language::Japanese),
+                &Language::English,
+            )
+            .await
             .expect("Translation failed");
         assert_eq!(
-            out,
+            out.text,
             vec![
                 "It may rain tomorrow.".to_owned(),
                 "He thinks deeply about the problem.".to_owned(),
@@ -284,10 +311,16 @@ mod tests {
             "Artificial intelligence is changing the world rapidly.".to_string(),
         ];
         let out = jparacrawl
-            .translate_vec(&input_en, None, Language::English, &Language::Japanese)
+            .translate_vec(
+                &input_en,
+                None,
+                Some(Language::English),
+                &Language::Japanese,
+            )
+            .await
             .expect("Translation failed");
         assert_eq!(
-            out,
+            out.text,
             vec![
                 "会議は来週まで延期されました。".to_string(),
                 "彼女はすぐに何かが間違っていることに気づきました。".to_string(),

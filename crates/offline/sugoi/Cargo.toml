@@ -14,3 +14,7 @@ maplit.workspace = true
 env_logger.workspace = true
 regex.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

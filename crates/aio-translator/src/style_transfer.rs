@@ -1,36 +1,19 @@
 use aio_translator_interface::{
-    AsyncTranslator, BlockingTranslator, Language, TranslationListOutput, TranslationOutput,
-    Translator, TranslatorMutTrait, TranslatorTrait, error::Error, prompt::PromptBuilder,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, prompt::PromptBuilder,
 };
 use async_trait::async_trait;
 use fancy_regex::Regex;
 use unicode_general_category::{GeneralCategory, get_general_category};
 
-pub struct StyleTransfer<T: Translator> {
+pub struct StyleTransfer<T: AsyncTranslator> {
     t: T,
 }
 
-impl<T: Translator + Send + Sync> Translator for StyleTransfer<T> {
+#[async_trait]
+impl<T: AsyncTranslator + Send + Sync> AsyncTranslator for StyleTransfer<T> {
     fn local(&self) -> bool {
         self.t.local()
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        match self.t.translator() {
-            TranslatorTrait::Async(_) => TranslatorTrait::Async(self),
-            TranslatorTrait::Blocking(_) => TranslatorTrait::Blocking(self),
-        }
-    }
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        match self.t.translator_mut() {
-            TranslatorMutTrait::Async(_) => TranslatorMutTrait::Async(self),
-            TranslatorMutTrait::Blocking(_) => TranslatorMutTrait::Blocking(self),
-        }
-    }
-}
-
-#[async_trait]
-impl<T: Translator + Send + Sync> AsyncTranslator for StyleTransfer<T> {
     async fn translate(
         &self,
         query: &str,
@@ -44,13 +27,7 @@ impl<T: Translator + Send + Sync> AsyncTranslator for StyleTransfer<T> {
                 lang: from,
             });
         }
-        let mut trans = self
-            .t
-            .translator()
-            .as_async()
-            .unwrap()
-            .translate(query, context, from, to)
-            .await?;
+        let mut trans = self.t.translate(query, context, from, to).await?;
         if is_valuable_text(&trans.text) {
             trans.text = clean_translation_output(query, &trans.text, *to);
         }
@@ -70,13 +47,7 @@ impl<T: Translator + Send + Sync> AsyncTranslator for StyleTransfer<T> {
                 lang: from,
             });
         }
-        let mut trans = self
-            .t
-            .translator()
-            .as_async()
-            .unwrap()
-            .translate_vec(query, context, from, to)
-            .await?;
+        let mut trans = self.t.translate_vec(query, context, from, to).await?;
         trans.text = query
             .iter()
             .zip(trans.text)
@@ -86,53 +57,6 @@ impl<T: Translator + Send + Sync> AsyncTranslator for StyleTransfer<T> {
             })
             .collect();
         Ok(trans)
-    }
-}
-
-impl<T: Translator + Send + Sync> BlockingTranslator for StyleTransfer<T> {
-    fn translate(
-        &mut self,
-        query: &str,
-        context: Option<PromptBuilder>,
-        from: Language,
-        to: &Language,
-    ) -> anyhow::Result<String> {
-        if from == *to {
-            return Ok(query.to_owned());
-        }
-        let trans = self
-            .t
-            .translator_mut()
-            .as_blocking()
-            .unwrap()
-            .translate(query, context, from, to)?;
-        Ok(clean_translation_output(query, &trans, *to))
-    }
-
-    fn translate_vec(
-        &mut self,
-        query: &[String],
-        context: Option<PromptBuilder>,
-        from: Language,
-        to: &Language,
-    ) -> anyhow::Result<Vec<String>> {
-        if from == *to {
-            return Ok(query.to_owned());
-        }
-        let trans = self
-            .t
-            .translator_mut()
-            .as_blocking()
-            .unwrap()
-            .translate_vec(query, context, from, to)?;
-        Ok(query
-            .iter()
-            .zip(trans)
-            .map(|(query, trans)| match is_valuable_text(&trans) {
-                true => clean_translation_output(query, &trans, *to),
-                false => query.to_owned(),
-            })
-            .collect())
     }
 }
 

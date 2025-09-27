@@ -28,7 +28,8 @@ unicode-general-category = "1.0.0"
 async-trait.workspace = true
 ct2rs = { workspace = true, default-features = false, features = ["vendored"] }
 anyhow.workspace = true
-
+tokio = { workspace = true, features = ["sync"] }
+async-scoped = { workspace = true, features = ["use-tokio"] }
 [features]
 lingua = ["dep:aio-translator-lingua"]
 whatlang = ["dep:aio-translator-whatlang"]

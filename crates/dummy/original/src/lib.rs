@@ -1,6 +1,5 @@
 use aio_translator_interface::{
-    BlockingTranslator, Language, Translator, TranslatorMutTrait, TranslatorTrait,
-    prompt::PromptBuilder,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, prompt::PromptBuilder,
 };
 
 pub struct OriginalTranslator {}
@@ -11,38 +10,35 @@ impl OriginalTranslator {
     }
 }
 
-impl Translator for OriginalTranslator {
+#[async_trait::async_trait]
+impl AsyncTranslator for OriginalTranslator {
     fn local(&self) -> bool {
         false
     }
 
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Blocking(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Blocking(self)
-    }
-}
-
-impl BlockingTranslator for OriginalTranslator {
-    fn translate(
-        &mut self,
+    async fn translate(
+        &self,
         input: &str,
         _: Option<PromptBuilder>,
-        _: Language,
+        _: Option<Language>,
         _: &Language,
-    ) -> anyhow::Result<String> {
-        Ok(input.to_owned())
+    ) -> anyhow::Result<TranslationOutput> {
+        Ok(TranslationOutput {
+            text: input.to_owned(),
+            lang: None,
+        })
     }
 
-    fn translate_vec(
-        &mut self,
+    async fn translate_vec(
+        &self,
         items: &[String],
         _: Option<PromptBuilder>,
-        _: Language,
+        _: Option<Language>,
         _: &Language,
-    ) -> anyhow::Result<Vec<String>> {
-        Ok(items.to_vec())
+    ) -> anyhow::Result<TranslationListOutput> {
+        Ok(TranslationListOutput {
+            text: items.to_vec(),
+            lang: None,
+        })
     }
 }

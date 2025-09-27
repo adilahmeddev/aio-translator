@@ -9,7 +9,7 @@ pub enum Error {
     #[error("Couldnt convert language")]
     UnknownLanguage(Language),
     #[error("Translator doesnt support this language")]
-    UnknownLanguageGroup(Language, Language),
+    UnknownLanguageGroup(Option<Language>, Language),
     #[error("failed to convert string to language")]
     CouldNotMapLanguage(Option<String>),
     #[error("api did not return a response")]
@@ -18,6 +18,8 @@ pub enum Error {
     RequestToLong(u32, u32),
     #[error("Request failed with status code")]
     RequestFailed(u16),
+    #[error("Translator required a input language")]
+    NoLanguage,
 }
 
 #[derive(Debug)]

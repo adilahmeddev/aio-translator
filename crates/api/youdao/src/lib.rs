@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aio_translator_interface::{
-    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, Translator,
-    TranslatorMutTrait, TranslatorTrait, error::Error, prompt::PromptBuilder,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, error::Error,
+    prompt::PromptBuilder,
 };
 use rand::Rng as _;
 use reqwest::{Client, header::CONTENT_TYPE};
@@ -19,7 +19,7 @@ pub struct YoudaoTranslator {
 }
 
 fn generate_random_mac() -> [u8; 6] {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut mac = [0u8; 6];
     rng.fill(&mut mac);
 
@@ -31,7 +31,7 @@ fn generate_random_mac() -> [u8; 6] {
 
 impl YoudaoTranslator {
     pub fn new(app_key: String, app_secret: String) -> Self {
-        let seed: u16 = rand::thread_rng().random();
+        let seed: u16 = rand::rng().random();
         Self {
             mac: generate_random_mac(),
             client: Client::new(),
@@ -39,20 +39,6 @@ impl YoudaoTranslator {
             app_secret,
             context: Context::new(seed),
         }
-    }
-}
-
-impl Translator for YoudaoTranslator {
-    fn local(&self) -> bool {
-        false
-    }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Async(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Async(self)
     }
 }
 
@@ -65,6 +51,9 @@ fn sha256_encode(sign_str: &str) -> String {
 
 #[async_trait::async_trait]
 impl AsyncTranslator for YoudaoTranslator {
+    fn local(&self) -> bool {
+        false
+    }
     async fn translate(
         &self,
         query: &str,
@@ -153,7 +142,7 @@ fn truncate(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use aio_translator_interface::{Language, Translator as _};
+    use aio_translator_interface::{AsyncTranslator as _, Language};
 
     use crate::YoudaoTranslator;
 
@@ -183,8 +172,6 @@ mod tests {
         let key = std::env::var("YOUDAO_APP_KEY").expect("YOUDAO_APP_KEY not set");
         let secret = std::env::var("YOUDAO_APP_SECRET").expect("YOUDAO_APP_SECRET not set");
         let trans = YoudaoTranslator::new(key, secret);
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate("Hello World", None, None, &Language::German)
             .await
@@ -200,8 +187,6 @@ mod tests {
         let key = std::env::var("YOUDAO_APP_KEY").expect("YOUDAO_APP_KEY not set");
         let secret = std::env::var("YOUDAO_APP_SECRET").expect("YOUDAO_APP_SECRET not set");
         let trans = YoudaoTranslator::new(key, secret);
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate(
                 "Hello World",

@@ -3,8 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aio_translator_interface::error::Error;
 use aio_translator_interface::prompt::PromptBuilder;
 use aio_translator_interface::{
-    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, Translator,
-    TranslatorMutTrait, TranslatorTrait,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -33,22 +32,11 @@ impl PapagoTranslator {
     }
 }
 
-impl Translator for PapagoTranslator {
+#[async_trait::async_trait]
+impl AsyncTranslator for PapagoTranslator {
     fn local(&self) -> bool {
         false
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Async(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Async(self)
-    }
-}
-
-#[async_trait::async_trait]
-impl AsyncTranslator for PapagoTranslator {
     async fn translate(
         &self,
         query: &str,
@@ -219,7 +207,7 @@ struct Root1 {
 
 #[cfg(test)]
 mod tests {
-    use aio_translator_interface::{Language, Translator as _};
+    use aio_translator_interface::{AsyncTranslator as _, Language};
 
     use crate::{PapagoTranslator, get_languages};
 
@@ -237,8 +225,6 @@ mod tests {
         let trans = PapagoTranslator::new(false)
             .await
             .expect("Failed to create translator");
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate_vec(
                 &vec!["Hello World".to_owned(), "This is a test".to_owned()],
@@ -259,8 +245,6 @@ mod tests {
         let trans = PapagoTranslator::new(false)
             .await
             .expect("Failed to create translator");
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate(
                 "Hello World",

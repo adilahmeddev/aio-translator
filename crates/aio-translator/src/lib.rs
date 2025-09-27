@@ -1,9 +1,9 @@
+mod rate_limit;
 mod style_transfer;
 
 pub use aio_translator_interface::{
-    AsyncTranslator, BlockingTranslator, Detector, Language, Model, TranslationListOutput,
-    TranslationOutput, Translator, TranslatorTrait, error::ApiError, error::Error,
-    prompt::PromptBuilder,
+    AsyncTranslator, Detector, Language, Model, TranslationListOutput, TranslationOutput,
+    error::ApiError, error::Error, prompt::PromptBuilder,
 };
 
 pub use aio_translator_baidu::BaiduTranslator;
@@ -29,26 +29,9 @@ pub use aio_translator_sugoi::SugoiTranslator;
 pub use aio_translator_whatlang::WhatLangDetector;
 pub use aio_translator_youdao::YoudaoTranslator;
 pub use ct2rs::ComputeType;
-pub use style_transfer::StyleTransfer;
-pub use style_transfer::is_valuable_text;
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test_style_transfer() {
-        pub use crate::Translator;
-        let cuda = true;
-        let mut t = crate::SugoiTranslator::new(cuda, crate::ComputeType::DEFAULT);
-        t.translator_mut()
-            .as_blocking()
-            .unwrap()
-            .translate_vec(
-                &["Hello World".to_owned()],
-                None,
-                crate::Language::Japanese,
-                &crate::Language::English,
-            )
-            .unwrap();
-    }
+pub mod wrapper {
+    pub use crate::rate_limit::RateLimiter;
+    pub use crate::style_transfer::StyleTransfer;
 }
+
+pub use style_transfer::is_valuable_text;

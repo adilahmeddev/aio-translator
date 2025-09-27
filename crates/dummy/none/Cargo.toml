@@ -8,3 +8,4 @@ publish = false
 aio-translator-interface.workspace = true
 reqwest.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true

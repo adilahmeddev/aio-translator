@@ -1,6 +1,6 @@
 use aio_translator_interface::{
-    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, Translator,
-    TranslatorMutTrait, TranslatorTrait, error::Error, prompt::PromptBuilder,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, error::Error,
+    prompt::PromptBuilder,
 };
 
 use reqwest::Client;
@@ -28,6 +28,9 @@ pub struct CaiyunTranslator {
 
 #[async_trait::async_trait]
 impl AsyncTranslator for CaiyunTranslator {
+    fn local(&self) -> bool {
+        false
+    }
     async fn translate(
         &self,
         query: &str,
@@ -95,23 +98,9 @@ impl CaiyunTranslator {
     }
 }
 
-impl Translator for CaiyunTranslator {
-    fn local(&self) -> bool {
-        false
-    }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Async(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Async(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use aio_translator_interface::{Language, Translator as _};
+    use aio_translator_interface::{AsyncTranslator as _, Language};
 
     use crate::CaiyunTranslator;
 
@@ -133,8 +122,6 @@ mod tests {
         dotenv::dotenv().ok();
         let auth = std::env::var("CAIYUN_TOKEN").expect("CAIYUN_TOKEN not set");
         let trans = CaiyunTranslator::new(auth, "demo".to_string());
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate("Hello World", None, None, &Language::German)
             .await
@@ -149,8 +136,6 @@ mod tests {
         dotenv::dotenv().ok();
         let auth = std::env::var("CAIYUN_TOKEN").expect("CAIYUN_TOKEN not set");
         let trans = CaiyunTranslator::new(auth, "demo".to_string());
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate(
                 "Hello World",

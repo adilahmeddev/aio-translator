@@ -1,6 +1,6 @@
 use aio_translator_interface::{
-    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, Translator,
-    TranslatorMutTrait, TranslatorTrait, error::Error, prompt::PromptBuilder,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, error::Error,
+    prompt::PromptBuilder,
 };
 
 use reqwest::{Client, header::REFERER};
@@ -29,22 +29,11 @@ pub fn input_limit_checker(query: &str, input_limit: u32) -> Result<(), Error> {
     Ok(())
 }
 
-impl Translator for MyMemoryTranslator {
+#[async_trait::async_trait]
+impl AsyncTranslator for MyMemoryTranslator {
     fn local(&self) -> bool {
         false
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Async(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Async(self)
-    }
-}
-
-#[async_trait::async_trait]
-impl AsyncTranslator for MyMemoryTranslator {
     async fn translate(
         &self,
         query: &str,
@@ -128,7 +117,7 @@ impl MyMemoryTranslator {
 
 #[cfg(test)]
 mod tests {
-    use aio_translator_interface::{Language, Translator as _};
+    use aio_translator_interface::{AsyncTranslator as _, Language};
     use reqwest::Client;
     use scraper::{Html, Selector};
 
@@ -138,8 +127,6 @@ mod tests {
     async fn translate_unknown() {
         dotenv::dotenv().ok();
         let trans = MyMemoryTranslator::new();
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate("Hello World", None, None, &Language::German)
             .await
@@ -189,8 +176,6 @@ mod tests {
     async fn translate_known() {
         dotenv::dotenv().ok();
         let trans = MyMemoryTranslator::new();
-        let trans = trans.translator();
-        let trans = trans.as_async().expect("Failed to create async translator");
         let trans = trans
             .translate(
                 "Hello World",

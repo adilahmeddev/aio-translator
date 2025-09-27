@@ -1,8 +1,7 @@
 //https://docs.rs/crate/translation-api-cn/latest/source/src/baidu.rs
 
 use aio_translator_interface::{
-    AsyncTranslator, Language, TranslationListOutput, TranslationOutput, Translator,
-    TranslatorMutTrait, TranslatorTrait,
+    AsyncTranslator, Language, TranslationListOutput, TranslationOutput,
     error::{ApiError, Error},
     prompt::PromptBuilder,
 };
@@ -10,6 +9,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
 pub struct BaiduTranslator {
     url: String,
     app_id: String,
@@ -17,22 +17,11 @@ pub struct BaiduTranslator {
     client: Client,
 }
 
-impl Translator for BaiduTranslator {
+#[async_trait]
+impl AsyncTranslator for BaiduTranslator {
     fn local(&self) -> bool {
         false
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Async(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Async(self)
-    }
-}
-
-#[async_trait]
-impl AsyncTranslator for BaiduTranslator {
     async fn translate(
         &self,
         query: &str,

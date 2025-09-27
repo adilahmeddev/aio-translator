@@ -1,17 +1,19 @@
 use aio_translator_interface::{
-    BlockingTranslator, Language, Model, Translator, TranslatorMutTrait, TranslatorTrait,
+    AsyncTranslator, Language, Model, TranslationListOutput, TranslationOutput,
     error::{self, Error},
     prompt::PromptBuilder,
     tokenizer::SentenceTokenizer,
 };
 use ct2rs::{BatchType, ComputeType, Config, Device, Tokenizer, TranslationOptions};
 
-use interface_model::{ModelLoad, ModelSource, impl_model_load_helpers};
+use interface_model::{
+    ModelLoad, ModelRead, ModelSource, ModelWrap, impl_model_helpers, impl_model_load_helpers,
+};
 use maplit::hashmap;
 use regex::Regex;
 
 pub struct SugoiTranslator {
-    loaded_models: Option<ct2rs::Translator<MyTokenizer>>,
+    loaded_models: ModelWrap<ct2rs::Translator<MyTokenizer>>,
     cuda: bool,
     compute_type: ComputeType,
 }
@@ -96,46 +98,41 @@ impl SugoiTranslator {
     }
 }
 
-impl Translator for SugoiTranslator {
+#[async_trait::async_trait]
+impl AsyncTranslator for SugoiTranslator {
     fn local(&self) -> bool {
         true
     }
-
-    fn translator<'a>(&'a self) -> TranslatorTrait<'a> {
-        TranslatorTrait::Blocking(self)
-    }
-
-    fn translator_mut<'a>(&'a mut self) -> TranslatorMutTrait<'a> {
-        TranslatorMutTrait::Blocking(self)
-    }
-}
-
-impl BlockingTranslator for SugoiTranslator {
-    fn translate(
-        &mut self,
+    async fn translate(
+        &self,
         query: &str,
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<String> {
-        let mut arr = self.translate_vec(&vec![query.to_owned()], None, from, to)?;
-        Ok(arr.remove(0))
+    ) -> anyhow::Result<TranslationOutput> {
+        let mut arr = self
+            .translate_vec(&vec![query.to_owned()], None, from, to)
+            .await?;
+        Ok(TranslationOutput {
+            text: arr.text.remove(0),
+            lang: None,
+        })
     }
 
-    fn translate_vec(
-        &mut self,
+    async fn translate_vec(
+        &self,
         query: &[String],
         _: Option<PromptBuilder>,
-        from: Language,
+        from: Option<Language>,
         to: &Language,
-    ) -> anyhow::Result<Vec<String>> {
-        if let (Language::Japanese, Language::English) = (from, to) {
+    ) -> anyhow::Result<TranslationListOutput> {
+        if let (Some(Language::Japanese), Language::English) = (from, to) {
         } else {
             Err(error::Error::UnknownLanguageGroup(from, to.clone()))?;
         };
 
         let (query, query_split_sizes) = self.pre_tokenize(query)?;
-        let model = self.load()?;
+        let model = self.load().await?;
         let trans = model.translate_batch(
             &query,
             &TranslationOptions {
@@ -150,7 +147,11 @@ impl BlockingTranslator for SugoiTranslator {
             },
             None,
         )?;
-        self.post_detokenize(trans.into_iter().map(|v| v.0).collect(), query_split_sizes)
+        Ok(TranslationListOutput {
+            text: self
+                .post_detokenize(trans.into_iter().map(|v| v.0).collect(), query_split_sizes)?,
+            lang: None,
+        })
     }
 }
 
@@ -169,22 +170,19 @@ impl Tokenizer for MyTokenizer {
     }
 }
 
+#[async_trait::async_trait]
 impl ModelLoad for SugoiTranslator {
-    type T = ct2rs::Translator<MyTokenizer>;
+    impl_model_load_helpers!(loaded_models, ct2rs::Translator<MyTokenizer>);
 
-    fn loaded(&self) -> bool {
-        self.loaded_models.is_some()
-    }
+    async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
+        let ja_path = self
+            .download_model("spm.ja.nopretok", "spm.ja.nopretok.model")
+            .await?;
+        let en_path = self
+            .download_model("spm.en.nopretok", "spm.en.nopretok.model")
+            .await?;
 
-    fn get_model(&mut self) -> Option<&mut Self::T> {
-        self.loaded_models.as_mut()
-    }
-
-    fn reload(&mut self) -> anyhow::Result<&mut Self::T> {
-        let ja_path = self.download_model("spm.ja.nopretok", "spm.ja.nopretok.model")?;
-        let en_path = self.download_model("spm.en.nopretok", "spm.en.nopretok.model")?;
-
-        let model = self.download_model("ja-en", "ja-en/model.bin")?;
+        let model = self.download_model("ja-en", "ja-en/model.bin").await?;
 
         let model = model.parent().map(|v| v.to_path_buf()).unwrap_or(model);
 
@@ -203,13 +201,13 @@ impl ModelLoad for SugoiTranslator {
                 ..Default::default()
             },
         )?;
-        self.loaded_models = Some(v);
-        Ok(self.loaded_models.as_mut().unwrap())
+        *self.loaded_models.write().await = Some(v);
+        Ok(self.get_model().await.unwrap())
     }
 }
 
 impl Model for SugoiTranslator {
-    impl_model_load_helpers!("translator", "sugoi");
+    impl_model_helpers!("translator", "sugoi", loaded_models);
 
     fn models(&self) -> std::collections::HashMap<&'static str, interface_model::ModelSource> {
         hashmap! {
@@ -227,10 +225,6 @@ impl Model for SugoiTranslator {
             }
         }
     }
-
-    fn unload(&mut self) {
-        self.loaded_models = None
-    }
 }
 
 #[cfg(test)]
@@ -239,17 +233,17 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_load() {
-        let mut sugoi = SugoiTranslator::new(false, ComputeType::DEFAULT);
-        assert!(sugoi.load().is_ok());
-        assert!(sugoi.loaded());
+    #[tokio::test]
+    async fn test_load() {
+        let sugoi = SugoiTranslator::new(false, ComputeType::DEFAULT);
+        assert!(sugoi.load().await.is_ok());
+        assert!(sugoi.loaded().await);
     }
 
-    #[test]
-    fn test_translate() {
+    #[tokio::test]
+    async fn test_translate() {
         env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
-        let mut sugoi = SugoiTranslator::new(false, ComputeType::DEFAULT);
+        let sugoi = SugoiTranslator::new(false, ComputeType::DEFAULT);
         let input_ja = vec![
             "明日は雨が降るかもしれません。".to_string(),
             "彼はその問題について深く考えている。".to_string(),
@@ -257,10 +251,16 @@ mod tests {
         ];
 
         let out = sugoi
-            .translate_vec(&input_ja, None, Language::Japanese, &Language::English)
+            .translate_vec(
+                &input_ja,
+                None,
+                Some(Language::Japanese),
+                &Language::English,
+            )
+            .await
             .expect("Translation failed");
         assert_eq!(
-            out,
+            out.text,
             vec![
                 "It might rain tomorrow.".to_owned(),
                 "He's thinking deeply about the problem.".to_owned(),
