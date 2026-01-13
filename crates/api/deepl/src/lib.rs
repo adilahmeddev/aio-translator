@@ -6,7 +6,7 @@ use aio_translator_interface::{
 };
 
 use anyhow::bail;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -26,6 +26,7 @@ fn most_common_string(strings: &[String]) -> Option<String> {
 
 pub struct DeeplTranslator {
     client: Client,
+    url: &'static str,
     auth: String,
 }
 
@@ -33,11 +34,14 @@ impl DeeplTranslator {
     pub fn new(auth: String) -> Self {
         Self {
             client: Default::default(),
+            url: get_url(&auth),
             auth,
         }
     }
 }
-
+fn get_url(auth: &String) -> &'static str {
+    if auth.clone().ends_with(":fx") { "https://api-free.deepl.com" } else { "https://api.deepl.com/" }
+}
 #[async_trait::async_trait]
 impl AsyncTranslator for DeeplTranslator {
     fn local(&self) -> bool {
@@ -74,9 +78,12 @@ impl AsyncTranslator for DeeplTranslator {
             None => json!({"text": query,
                 "target_lang": to.to_deepl()}),
         };
+        let mut url = Url::parse(self.url)?;
+        url.path_segments_mut().unwrap().push("v2").push("translate");
+
         let request: Root1 = self
             .client
-            .post("https://api-free.deepl.com/v2/translate")
+            .post(url)
             .header("Authorization", format!("DeepL-Auth-Key {}", self.auth))
             .json(&body)
             .send()
@@ -99,8 +106,13 @@ impl AsyncTranslator for DeeplTranslator {
 
 pub async fn get_languages(auth: &String) -> anyhow::Result<Vec<String>> {
     let client = Client::new();
+
+    let mut url = Url::parse(get_url(auth))?;
+    url.path_segments_mut().unwrap().push("v2").push("languages");
+    url.set_query(Some("type=source"));
+
     let response = client
-        .get("https://api-free.deepl.com/v2/languages?type=source")
+        .get(url)
         .header("Authorization", format!("DeepL-Auth-Key {}", auth))
         .header("accept", "application/json")
         .send()
