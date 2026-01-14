@@ -78,8 +78,7 @@ impl AsyncTranslator for DeeplTranslator {
             None => json!({"text": query,
                 "target_lang": to.to_deepl()}),
         };
-        let mut url = Url::parse(self.url)?;
-        url.path_segments_mut().unwrap().push("v2").push("translate");
+        let url = Url::parse(&self.url)?.join("v2/translate")?;
 
         let request: Root1 = self
             .client
