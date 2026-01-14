@@ -40,7 +40,7 @@ impl DeeplTranslator {
     }
 }
 fn get_url(auth: &String) -> &'static str {
-    if auth.clone().ends_with(":fx") { "https://api-free.deepl.com" } else { "https://api.deepl.com/" }
+    if auth.ends_with(":fx") { "https://api-free.deepl.com/" } else { "https://api.deepl.com/" }
 }
 #[async_trait::async_trait]
 impl AsyncTranslator for DeeplTranslator {
