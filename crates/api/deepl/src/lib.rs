@@ -106,8 +106,7 @@ impl AsyncTranslator for DeeplTranslator {
 pub async fn get_languages(auth: &String) -> anyhow::Result<Vec<String>> {
     let client = Client::new();
 
-    let mut url = Url::parse(get_url(auth))?
-        .join("v2/languages");
+    let mut url = Url::parse(get_url(auth))?.join("v2/languages")?;
     url.set_query(Some("type=source"));
 
     let response = client
